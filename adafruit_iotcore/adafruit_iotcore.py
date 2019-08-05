@@ -31,13 +31,17 @@ Implementation Notes
   https://github.com/adafruit/circuitpython/releases
 
 """
+# Core CircuitPython modules
 import gc
 import time
-
-# required for get_local_time
 import rtc
+import json
+
 import adafruit_requests as requests
 import adafruit_esp32spi.adafruit_esp32spi_socket as socket
+
+from adafruit_rsa import PrivateKey, sign
+from adafruit_iotcore.tools import string
 
 
 __version__ = "0.0.0-auto.0"
@@ -52,17 +56,21 @@ TIME_SERVICE_STRFTIME = (
     "&fmt=%25Y-%25m-%25d+%25H%3A%25M%3A%25S.%25L+%25j+%25u+%25z+%25Z"
 )
 
-
 class Cloud_Core:
     """CircuitPython Google Cloud IoT Core implementation.
 
-    :param dict secrets: Secrets.py file from CIRCUITPY drive.
-    :param esp: esp32spi object
+    :param NetworkManager: Network Manager module, such as WiFiManager.
+    :param dict secrets: Secrets.py file from CIRCUITPY.
     :param bool debug: Enable library debugging, defaults to False.
     """
 
-    def __init__(self, secrets, esp, debug=False):
+    def __init__(self, network_manager, secrets, debug=False):
         self._debug = debug
+        network_manager_type = str(type(network_manager))
+        if 'ESPSPI_WiFiManager' in network_manager_type:
+            self._wifi = network_manager
+        else:
+            raise TypeError("This library requires a NetworkManager object.")
         if hasattr(secrets, "keys"):
             self._secrets = secrets
         else:
@@ -75,27 +83,11 @@ class Cloud_Core:
         self._reg_id = secrets["registry_id"]
         self._device_id = secrets["device_id"]
         self._private_key = secrets["private_key"]
-        # Set Time
-        self._esp = esp
-        requests.set_socket(socket, self._esp)
+        # Set RTC Network Time
         self.get_local_time()
-        # TODO: create the JWT
-        # https://cloud.google.com/iot/docs/how-tos/credentials/jwts#iot-core-jwt-python
-        self.create_jwt()
+        # Generate JWT
+        # self.create_jwt()
 
-    def connect(self, registry):
-        """Connects to the MQTT bridge and authenticates.
-        Needs to be performed after create_jwt is executed.
-        :param dict registry: The project id, cloud region, registry id,
-                                and device id, as a dictionary of strings.
-        """
-        client_id = "projects/{}/locations/{}/registries/{}/devices/{}".format(
-            registry["project_id"],
-            registry["cloud_region"],
-            registry["registry_id"],
-            registry["device_id"],
-        )
-        print("Device client_id is '{}'".format(client_id))
 
     def get_local_time(self):
         """Fetch and "set" the local time of this microcontroller to the local time at the location, using an internet time API.
@@ -120,7 +112,7 @@ class Cloud_Core:
             api_url = TIME_SERVICE % (aio_username, aio_key)
         api_url += TIME_SERVICE_STRFTIME
         try:
-            response = requests.get(api_url)
+            response = self._wifi.get(api_url)
             if self._debug:
                 print("Time request: ", api_url)
                 print("Time reply: ", response.text)
@@ -148,50 +140,3 @@ class Cloud_Core:
         response.close()
         response = None
         gc.collect()
-
-    # TODO: This requires CircuitPython_RSA, which is in-progress
-    def create_jwt(algorithm="RS256", token_ttl="43200"):
-        """Creates a JWT (https://jwt.io) to establish an MQTT connection.
-            Args:
-            project_id: The cloud project ID this device belongs to
-            private_key_file: A path to a file containing either an RSA256 or
-                    ES256 private key.
-            algorithm: The encryption algorithm to use. Only 'RS256' is supported
-                        in this implementation.
-            Returns:
-                A JWT generated from the given project_id and private key, which
-                expires in 20 minutes. After 20 minutes, your client will be
-                disconnected, and a new JWT will have to be generated.
-            Raises:
-                ValueError: If the private_key_file does not contain a known key.
-            """
-        if self._debug:
-            print("Creating JWT...")
-        # Epoch_offset is needed because micropython epoch is 2000-1-1 and unix is 1970-1-1. Adding 946684800 (30 years)
-        epoch_offset = 946684800
-        token = {
-            # The time the token was issued at.
-            "iat": time.time() + epoch_offset,
-            # The time the token expires.
-            "exp": time.time() + epoch_offset + token_ttl,
-            # The audience field should always be set to the GCP project id.
-            "aud": self._secrets["project_id"],
-        }
-        # TODO: Read and set the private key via call to rsa.PrivateKey
-        print(
-            "Creating JWT using {0} from private key: {1}".format(
-                algorithm, self._secrets["private_key"])
-            )
-        # RSA-based JWT Key Header
-        header = { "alg": "RS256", "typ": "JWT" }
-        # content = b42_urlsafe_encode(ujson.dumps(header).encode('utf-8'))
-        # content = content + '.' + b42_urlsafe_encode(ujson.dumps(claims).encode('utf-8'))
-        # signature = b42_urlsafe_encode(rsa.sign(content,private_key,'SHA-256'))
-        # return content+ '.' + signature #signed JWT
-
-
-    def refresh_jwt(self):
-        """Refreshes the JWT token if token is nearing expiration.
-        https://cloud.google.com/iot/docs/how-tos/credentials/jwts, Refreshing JWTs
-        """
-        return True
