@@ -43,6 +43,12 @@ import adafruit_esp32spi.adafruit_esp32spi_socket as socket
 from adafruit_rsa import PrivateKey, sign
 from adafruit_iotcore.tools import string
 
+try:
+    from binascii import b2a_base64
+except ImportError:
+    from adafruit_rsa.tools.binascii import b2a_base64
+
+    pass
 
 __version__ = "0.0.0-auto.0"
 __repo__ = "https://github.com/adafruit/Adafruit_CircuitPython_Cloud_IOT_Core.git"
@@ -56,6 +62,9 @@ TIME_SERVICE_STRFTIME = (
     "&fmt=%25Y-%25m-%25d+%25H%3A%25M%3A%25S.%25L+%25j+%25u+%25z+%25Z"
 )
 
+EPOCH_OFFSET = 946684800
+
+
 class Cloud_Core:
     """CircuitPython Google Cloud IoT Core implementation.
 
@@ -67,7 +76,7 @@ class Cloud_Core:
     def __init__(self, network_manager, secrets, debug=False):
         self._debug = debug
         network_manager_type = str(type(network_manager))
-        if 'ESPSPI_WiFiManager' in network_manager_type:
+        if "ESPSPI_WiFiManager" in network_manager_type:
             self._wifi = network_manager
         else:
             raise TypeError("This library requires a NetworkManager object.")
@@ -83,10 +92,41 @@ class Cloud_Core:
         self._reg_id = secrets["registry_id"]
         self._device_id = secrets["device_id"]
         self._private_key = secrets["private_key"]
+        self._jwt_ttl = secrets["jwt_ttl"]
         # Set RTC Network Time
         self.get_local_time()
         # Generate JWT
-        # self.create_jwt()
+        self._jwt = None
+        self.create_jwt()
+        print(self._jwt())
+
+
+    def create_jwt(self, jwt_algo="RS256"):
+        """Creates a JWT (JSON Web Token) for short-lived authentication
+        with Cloud IOT Core.
+        https://cloud.google.com/iot/docs/how-tos/credentials/jwts
+
+        :param str jwt_algo: JWT signing algorithm. RS256 and ES256 are supported
+                                by Cloud IOT Core.
+        """
+        priv_key = PrivateKey(*self._private_key)
+        # Required Claims
+        claims = {
+            # The time that the token was issued at
+            "iat": time.time() + EPOCH_OFFSET,
+            # The time the token expires.
+            "exp": time.time() + EPOCH_OFFSET + self._jwt_ttl,
+            # The audience field should always be set to the GCP project id.
+            "aud": self._proj_id
+        }
+        # JWT Header
+        header = {"alg": jwt_algo, "typ": "JWT"}
+        # JWT Signature
+        content = string.b42_urlsafe_encode(json.dumps(header).encode("utf-8"))
+        content = content + "." + string.b42_urlsafe_encode(json.dumps(token).encode("utf-8"))
+        # Compute JWT signature
+        signature = b42_urlsafe_encode(sign(content, priv_key, "SHA-256"))
+        self._jwt = "{0}.{1}".format(content, signature)
 
 
     def get_local_time(self):
