@@ -87,7 +87,97 @@ class MQTT:
         except:
             raise TypeError("Google Cloud Core IoT MQTT API requires a username.")
         # TODO: Verify JWT
+        # User-defined MQTT callback methods must be init'd to None
+        self.on_connect = None
+        self.on_disconnect = None
+        self.on_message = None
+        self.on_subscribe = None
+        self.on_unsubscribe = None
+        # MQTT event callbacks
+        self._client.on_connect = self._on_connect_mqtt
+        self._client.on_disconnect = self._on_disconnect_mqtt
+        self._client.on_message = self._on_message_mqtt
+        self._logger = False
+        # Write to the MiniMQTT logger, if avaliable.
+        if self._client._logger is not None:
+            self._logger = True
+            self._client.set_logger_level("DEBUG")
+        self._connected = False
+
+        def __enter__(self):
+            return self
+    
+        def __exit__(self, exception_type, exception_value, traceback):
+            self.disconnect()
         
+        def connect(self):
+            """Connects to the Google MQTT Broker.
+            """
+            try:
+                self._client.connect()
+            except:
+                raise ValueError("Unable to connect to Google MQTT API. Please verify your provided values")
+            self._connected = True
+
+        def disconnect(self):
+            """Disconnects from the Google MQTT Broker.
+            """
+            try:
+                self._client.disconnect()
+            except:
+                raise ValueError("Unable to disconnect from Google's MQTT broker.")
+            self._connected = False
+            # Reset all user-defined callbacks
+            self.on_connect = None
+            self.on_disconnect = None
+            self.on_message = None
+            self.on_subscribe = None
+            self.on_unsubscribe = None
+        
+        @property
+        def is_connected(self):
+            """Returns if client is connected to Google MQTT broker.
+            """
+            return self._connected
+
+    # pylint: disable=not-callable, unused-argument
+    def _on_connect_mqtt(self, client, userdata, flags, return_code):
+        """Runs when the client calls on_connect.
+        """
+        if self._logger:
+            self._client._logger.debug("Client called on_connect.")
+        if return_code == 0:
+            self._connected = True
+        else:
+            raise AdafruitIO_MQTTError(return_code)
+        # Call the user-defined on_connect callback if defined
+        if self.on_connect is not None:
+            self.on_connect(self)
+
+    # pylint: disable=not-callable, unused-argument
+    def _on_disconnect_mqtt(self, client, userdata, return_code):
+        """Runs when the client calls on_disconnect.
+        """
+        if self._logger:
+            self._client._logger.debug("Client called on_disconnect")
+        self._connected = False
+        # Call the user-defined on_disconnect callblack if defined
+        if self.on_disconnect is not None:
+            self.on_disconnect(self)
+    
+        # pylint: disable=not-callable
+        def _on_message_mqtt(self, client, topic, payload):
+            """Runs when the client calls on_message
+            """
+            if self._logger:
+                self._client._logger.debug("Client called on_message")
+            if self.on_message is not None:
+                # TODO: This may need to be parsed nicely, could an ugly response from server!
+                self.on_message(self, topic, payload)
+        
+        # todo: loop
+
+        # todo: loop_forever
 
 class Cloud_Core:
     """CircuitPython Google Cloud IoT Core module.
