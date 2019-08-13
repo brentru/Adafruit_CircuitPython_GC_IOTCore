@@ -34,16 +34,18 @@ Implementation Notes
 """
 # Core CircuitPython modules
 import gc
+import json
 import time
 import rtc
-import json
+
 import adafruit_logging as logging
 
+# ESP32SPI Modules
 import adafruit_requests as requests
-import adafruit_esp32spi.adafruit_esp32spi_socket as socket
+
+from adafruit_iotcore.tools import string
 
 from adafruit_rsa import PrivateKey, sign
-from adafruit_iotcore.tools import string
 
 try:
     from binascii import b2a_base64
@@ -65,13 +67,16 @@ TIME_SERVICE_STRFTIME = (
     "&fmt=%25Y-%25m-%25d+%25H%3A%25M%3A%25S.%25L+%25j+%25u+%25z+%25Z"
 )
 
-EPOCH_OFFSET = 946684800
+device_id = None
 
-class MQTT:
-    """Client for interacting with the Google Cloud IoT Core MQTT API.
+
+class MQTT_API:
+    """Client for interacting with Google's Cloud Core MQTT API.
 
     :param MiniMQTT mqtt_client: MiniMQTT Client object.
     """
+
+    # pylint: disable=protected-access
     def __init__(self, mqtt_client):
         # Check that provided object is a MiniMQTT client object
         mqtt_client_type = str(type(mqtt_client))
@@ -83,7 +88,7 @@ class MQTT:
             )
         # Verify that the MiniMQTT client was setup correctly.
         try:
-            self._user = self._client.username
+            self._user = self._client._user
         except:
             raise TypeError("Google Cloud Core IoT MQTT API requires a username.")
         # TODO: Verify JWT
@@ -98,51 +103,48 @@ class MQTT:
         self._client.on_disconnect = self._on_disconnect_mqtt
         self._client.on_message = self._on_message_mqtt
         self._logger = False
-        # Write to the MiniMQTT logger, if avaliable.
+        # Log to the MiniMQTT logger
         if self._client._logger is not None:
             self._logger = True
             self._client.set_logger_level("DEBUG")
         self._connected = False
 
-        def __enter__(self):
-            return self
-    
-        def __exit__(self, exception_type, exception_value, traceback):
-            self.disconnect()
-        
-        def connect(self):
-            """Connects to the Google MQTT Broker.
-            """
-            try:
-                self._client.connect()
-            except:
-                raise ValueError("Unable to connect to Google MQTT API. Please verify your provided values")
-            self._connected = True
+    def __enter__(self):
+        return self
 
-        def disconnect(self):
-            """Disconnects from the Google MQTT Broker.
-            """
-            try:
-                self._client.disconnect()
-            except:
-                raise ValueError("Unable to disconnect from Google's MQTT broker.")
-            self._connected = False
-            # Reset all user-defined callbacks
-            self.on_connect = None
-            self.on_disconnect = None
-            self.on_message = None
-            self.on_subscribe = None
-            self.on_unsubscribe = None
-        
-        @property
-        def is_connected(self):
-            """Returns if client is connected to Google MQTT broker.
-            """
-            return self._connected
+    def __exit__(self, exception_type, exception_value, traceback):
+        self.disconnect()
+
+    def connect(self):
+        """Connects to the Google MQTT Broker.
+        """
+        self._client.connect()
+        self._connected = True
+
+    def disconnect(self):
+        """Disconnects from the Google MQTT Broker.
+        """
+        try:
+            self._client.disconnect()
+        except:
+            raise ValueError("Unable to disconnect from Google's MQTT broker.")
+        self._connected = False
+        # Reset all user-defined callbacks
+        self.on_connect = None
+        self.on_disconnect = None
+        self.on_message = None
+        self.on_subscribe = None
+        self.on_unsubscribe = None
+
+    @property
+    def is_connected(self):
+        """Returns if mqtt client is connected to Google's MQTT broker.
+        """
+        return self._connected
 
     # pylint: disable=not-callable, unused-argument
     def _on_connect_mqtt(self, client, userdata, flags, return_code):
-        """Runs when the client calls on_connect.
+        """Runs when the mqtt client calls on_connect.
         """
         if self._logger:
             self._client._logger.debug("Client called on_connect.")
@@ -152,7 +154,7 @@ class MQTT:
             raise AdafruitIO_MQTTError(return_code)
         # Call the user-defined on_connect callback if defined
         if self.on_connect is not None:
-            self.on_connect(self)
+            self.on_connect(self, userdata, flags, return_code)
 
     # pylint: disable=not-callable, unused-argument
     def _on_disconnect_mqtt(self, client, userdata, return_code):
@@ -164,31 +166,96 @@ class MQTT:
         # Call the user-defined on_disconnect callblack if defined
         if self.on_disconnect is not None:
             self.on_disconnect(self)
-    
-        # pylint: disable=not-callable
-        def _on_message_mqtt(self, client, topic, payload):
-            """Runs when the client calls on_message
-            """
-            if self._logger:
-                self._client._logger.debug("Client called on_message")
-            if self.on_message is not None:
-                # TODO: This may need to be parsed nicely, could an ugly response from server!
-                self.on_message(self, topic, payload)
-        
-        # todo: loop
 
-        # todo: loop_forever
+    # pylint: disable=not-callable
+    def _on_message_mqtt(self, client, topic, payload):
+        """Runs when the client calls on_message
+        """
+        if self._logger:
+            self._client._logger.debug("Client called on_message")
+        if self.on_message is not None:
+            # TODO: This may need to be parsed nicely, could an ugly response from server!
+            self.on_message(self, topic, payload)
+
+    def loop(self):
+        """Maintains a connection with Google Cloud IoT Core's MQTT broker. You will
+        need to manually call this method within a loop to retain connection.
+        
+        Example of "pumping" a Google Core IoT loop.
+        ..code-block:: python
+
+            while True:
+                google_iot.loop()
+
+        """
+        if self._connected:
+            self._client.loop()
+
+    def loop_blocking(self):
+        """Begins a blocking loop to process messages from
+        IoT Core. Code below a call to this method will NOT run. 
+        """
+        self._client.loop_forever()
+
+    def subscribe(self, topic, qos=1):
+        """Subscribes to a Google Cloud IoT device topic.
+        """
+        mqtt_topic = "/devices/{}/{}".format(device_id, topic)
+        self._client.subscribe(mqtt_topic, qos)
+
+    def subscribe_to_config(self):
+        """Subscribes to a Google Cloud IoT device's configuration
+        mqtt topic.
+        """
+        self.subscribe("config", 1)
+
+    def subscribe_to_all_commands(self):
+        """Subscribes to a device's "commands/#" topic.
+        """
+        self.subscribe("commands/#", 1)
+
+    def publish(self, payload, topic="events", subfolder=None, qos=0):
+        """Publishes a payload from the device to its Google Cloud IoT
+        device topic, defaults to "event" topic. To send state, use the
+        publish_state method.
+
+        :param int payload: Data to publish to Google Cloud IoT
+        :param str payload: Data to publish to Google Cloud IoT
+        :param float payload: Data to publish to Google Cloud IoT
+        :param str topic: Required MQTT topic. Defaults to event.
+        :param str subfolder: Optional MQTT topic subfolder. Defaults to None.
+        :param int qos: Quality of Service level for the message. 
+        """
+        if subfolder is not None:
+            mqtt_topic = "/devices/{}/{}/{}".format(device_id, topic, subfolder)
+        elif topic is not None:
+            mqtt_topic = "/devices/{}/{}".format(device_id, topic)
+        elif topic == "state" and subfolder is not None:
+            raise ValueError("Subfolders are not supported for state messages.")
+        else:
+            raise TypeError("A topic string must be specified.")
+        self._client.publish(mqtt_topic, payload, qos=qos)
+
+    def publish_state(self, payload):
+        """Publishes a device state message to the Cloud IoT MQTT API. Data
+        sent by this method should be information about the device itself (such as number of
+        crashes, battery level, or device health). This method is unidirectional,
+        it communicates Device-to-Cloud only.
+        """
+        self._client.publish(payload, "state")
+
 
 class Cloud_Core:
     """CircuitPython Google Cloud IoT Core module.
 
     :param network_manager: Network Manager module, such as WiFiManager.
     :param dict secrets: Secrets.py file.
-    :param bool log: Enable library logging, defaults to False.
+    :param bool log: Enable Cloud_Core logging, defaults to False.
 
     """
 
     def __init__(self, network_manager, secrets, log=False):
+        global device_id
         # Validate NetworkManager
         network_manager_type = str(type(network_manager))
         if "ESPSPI_WiFiManager" in network_manager_type:
@@ -210,15 +277,23 @@ class Cloud_Core:
         self._proj_id = secrets["project_id"]
         self._region = secrets["cloud_region"]
         self._reg_id = secrets["registry_id"]
-        self._device_id = secrets["device_id"]
+        device_id = secrets["device_id"]
+        print(device_id)
         self._private_key = secrets["private_key"]
         self.broker = "mqtt.googleapis.com"
-        self.username = b"ignored"
+        self.username = b"unused"
         self.cid = self.client_id
 
     def generate_jwt(self, jwt_ttl=43200):
-        """Generates a JSON Web Token
+        """Generates a JSON Web Token (https://jwt.io/) using network time.
         :param int jwt_ttl: When the JWT token expires, defaults to 43200 minutes (or 12 hours).
+
+        Example usage of generating and setting a JSON-Web-Token:
+        ..code-block:: python
+
+            jwt = CloudCore.generate_jwt()
+            print("Generated JWT: ", jwt)
+
         """
         self._jwt_ttl = jwt_ttl
         # Set Network RTC time
@@ -230,14 +305,13 @@ class Cloud_Core:
 
     @property
     def client_id(self):
-        """Generates a Google Cloud IOT Core MQTT Client ID, set
-        to the full device path.
+        """Returns a Google Cloud IOT Core Client ID.
         """
         client_id = "projects/{0}/locations/{1}/registries/{2}/devices/{3}".format(
-            self._proj_id, self._region, self._reg_id, self._device_id
+            self._proj_id, self._region, self._reg_id, device_id
         )
         if self._log:
-            print("CID: ", client_id)
+            print("Client Identifier: ", client_id)
         return client_id
 
     @property
