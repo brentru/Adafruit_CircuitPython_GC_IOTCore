@@ -173,6 +173,7 @@ class MQTT_API:
         """
         if self._logger:
             self._client._logger.debug("Client called on_message")
+        print(client, topic, payload)
         if self.on_message is not None:
             # TODO: This may need to be parsed nicely, could an ugly response from server!
             self.on_message(self, topic, payload)
@@ -200,7 +201,7 @@ class MQTT_API:
     def subscribe(self, topic, qos=1):
         """Subscribes to a Google Cloud IoT device topic.
         """
-        mqtt_topic = "/devices/{}/{}".format(device_id, topic)
+        mqtt_topic = "/devices/{}/{}/".format(device_id, topic)
         self._client.subscribe(mqtt_topic, qos)
 
     def subscribe_to_config(self):
@@ -216,13 +217,13 @@ class MQTT_API:
 
     def publish(self, payload, topic="events", subfolder=None, qos=0):
         """Publishes a payload from the device to its Google Cloud IoT
-        device topic, defaults to "event" topic. To send state, use the
+        device topic, defaults to "events" topic. To send state, use the
         publish_state method.
 
         :param int payload: Data to publish to Google Cloud IoT
         :param str payload: Data to publish to Google Cloud IoT
         :param float payload: Data to publish to Google Cloud IoT
-        :param str topic: Required MQTT topic. Defaults to event.
+        :param str topic: Required MQTT topic. Defaults to events.
         :param str subfolder: Optional MQTT topic subfolder. Defaults to None.
         :param int qos: Quality of Service level for the message. 
         """
