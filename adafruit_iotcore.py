@@ -92,6 +92,10 @@ class MQTT_API:
         except:
             raise TypeError("Google Cloud Core IoT MQTT API requires a username.")
         # TODO: Verify JWT
+        # Add a "Idle Time" KeepAlive of 19 minutes
+        # if provided KeepAlive is 0 or > 20min. (https://cloud.google.com/iot/quotas)
+        if self._client._keep_alive == 0 or self._client._keep_alive >= 1200:
+            self._client._keep_alive = 1140
         # User-defined MQTT callback methods must be init'd to None
         self.on_connect = None
         self.on_disconnect = None
@@ -201,7 +205,7 @@ class MQTT_API:
     def subscribe(self, topic, qos=1):
         """Subscribes to a Google Cloud IoT device topic.
         """
-        mqtt_topic = "/devices/{}/{}/".format(device_id, topic)
+        mqtt_topic = "/devices/{}/{}".format(device_id, topic)
         self._client.subscribe(mqtt_topic, qos)
 
     def subscribe_to_config(self):
