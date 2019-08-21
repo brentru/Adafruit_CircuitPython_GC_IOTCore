@@ -19,7 +19,7 @@
 
 CircuitPython Google Cloud IoT Module
 
-* Author(s): Brent Rubell
+* Author(s): Brent Rubell, Google Inc.
 
 Implementation Notes
 --------------------
@@ -52,11 +52,8 @@ from adafruit_jwt import JWT
 # ESP32SPI Modules
 import adafruit_requests as requests
 
-#import string
-
 from adafruit_rsa import PrivateKey, sign
 from adafruit_binascii import b2a_base64, a2b_base64
-
 
 __version__ = "0.0.0-auto.0"
 __repo__ = "https://github.com/adafruit/Adafruit_CircuitPython_Cloud_IOT_Core.git"
@@ -71,8 +68,13 @@ TIME_SERVICE_STRFTIME = (
     "&fmt=%25Y-%25m-%25d+%25H%3A%25M%3A%25S.%25L+%25j+%25u+%25z+%25Z"
 )
 
+# Google IoT Device Identifier, shared between Cloud_Core and the MQTT_API
 device_id = None
 
+class MQTT_API_ERROR(Exception):
+    """Exception raised on MQTT API return-code errors."""
+    # pylint: disable=unnecessary-pass
+    pass
 
 class MQTT_API:
     """Client for interacting with Google's Cloud Core MQTT API.
@@ -95,9 +97,14 @@ class MQTT_API:
             self._user = self._client._user
         except:
             raise TypeError("Google Cloud Core IoT MQTT API requires a username.")
-        # TODO: Verify JWT
-        # Add a "Idle Time" KeepAlive of 19 minutes
-        # if provided KeepAlive is 0 or > 20min. (https://cloud.google.com/iot/quotas)
+        # Validate provided JWT before connecting
+        try:
+            JWT.validate(self._client._pass)
+        except:
+            raise TypeError("Invalid JWT provided.")
+        # If client has KeepAlive =0 or if KeepAlive > 20min,
+        # set KeepAlive to 19 minutes to avoid disconnection
+        # due to Idle Time (https://cloud.google.com/iot/quotas).
         if self._client._keep_alive == 0 or self._client._keep_alive >= 1200:
             self._client._keep_alive = 1140
         # User-defined MQTT callback methods must be init'd to None
@@ -111,8 +118,8 @@ class MQTT_API:
         self._client.on_disconnect = self._on_disconnect_mqtt
         self._client.on_message = self._on_message_mqtt
         self._logger = False
-        # Log to the MiniMQTT logger
         if self._client._logger is not None:
+            # Allow IOTCore to share MiniMQTT Client's logger
             self._logger = True
             self._client.set_logger_level("DEBUG")
         self._connected = False
@@ -143,10 +150,12 @@ class MQTT_API:
         self.on_message = None
         self.on_subscribe = None
         self.on_unsubscribe = None
+        # De-initialize MiniMQTT Client
+        self._client.deinit()
 
     @property
     def is_connected(self):
-        """Returns if mqtt client is connected to Google's MQTT broker.
+        """Returns if client is connected to Google's MQTT broker.
         """
         return self._connected
 
@@ -159,7 +168,7 @@ class MQTT_API:
         if return_code == 0:
             self._connected = True
         else:
-            raise AdafruitIO_MQTTError(return_code)
+            raise MQTT_API_ERROR(return_code)
         # Call the user-defined on_connect callback if defined
         if self.on_connect is not None:
             self.on_connect(self, userdata, flags, return_code)
@@ -181,9 +190,7 @@ class MQTT_API:
         """
         if self._logger:
             self._client._logger.debug("Client called on_message")
-        print(client, topic, payload)
         if self.on_message is not None:
-            # TODO: This may need to be parsed nicely, could an ugly response from server!
             self.on_message(self, topic, payload)
 
     def loop(self):
@@ -205,12 +212,8 @@ class MQTT_API:
         IoT Core. Code below a call to this method will NOT run. 
         """
         self._client.loop_forever()
-
-    def subscribe(self, topic, qos=1):
-        """Subscribes to a Google Cloud IoT device topic.
-        """
-        mqtt_topic = "/devices/{}/{}".format(device_id, topic)
-        self._client.subscribe(mqtt_topic, qos)
+    
+    # TODO: Implement a subscribe_to_subfolder topic
 
     def subscribe_to_config(self):
         """Subscribes to a Google Cloud IoT device's configuration
@@ -287,7 +290,6 @@ class Cloud_Core:
         self._region = secrets["cloud_region"]
         self._reg_id = secrets["registry_id"]
         device_id = secrets["device_id"]
-        print(device_id)
         self._private_key = secrets["private_key"]
         self.broker = "mqtt.googleapis.com"
         self.username = b"unused"
@@ -303,6 +305,7 @@ class Cloud_Core:
         if self._log:
             print("Client Identifier: ", client_id)
         return client_id
+
 
     def generate_jwt(self, ttl = 43200):
         """Generates a JSON Web Token (https://jwt.io/) using network time.
