@@ -29,7 +29,15 @@ Implementation Notes
 * Adafruit CircuitPython firmware for the supported boards:
   https://github.com/adafruit/circuitpython/releases
 
-# TODO: Require Requests, RSA
+* Adafruit CircuitPython Requests Module:
+  https://github.com/adafruit/Adafruit_CircuitPython_Requests
+
+* Adafruit CircuitPython RSA Module:
+  https://github.com/adafruit/Adafruit_CircuitPython_RSA
+
+
+* Adafruit CircuitPython Binascii Module:
+  https://github.com/adafruit/Adafruit_CircuitPython_binascii
 
 """
 # Core CircuitPython modules
@@ -39,20 +47,16 @@ import time
 import rtc
 
 import adafruit_logging as logging
+from adafruit_jwt import JWT
 
 # ESP32SPI Modules
 import adafruit_requests as requests
 
-from adafruit_iotcore.tools import string
+#import string
 
 from adafruit_rsa import PrivateKey, sign
+from adafruit_binascii import b2a_base64, a2b_base64
 
-try:
-    from binascii import b2a_base64
-except ImportError:
-    from adafruit_rsa.tools.binascii import b2a_base64
-
-    pass
 
 __version__ = "0.0.0-auto.0"
 __repo__ = "https://github.com/adafruit/Adafruit_CircuitPython_Cloud_IOT_Core.git"
@@ -289,25 +293,6 @@ class Cloud_Core:
         self.username = b"unused"
         self.cid = self.client_id
 
-    def generate_jwt(self, jwt_ttl=43200):
-        """Generates a JSON Web Token (https://jwt.io/) using network time.
-        :param int jwt_ttl: When the JWT token expires, defaults to 43200 minutes (or 12 hours).
-
-        Example usage of generating and setting a JSON-Web-Token:
-        ..code-block:: python
-
-            jwt = CloudCore.generate_jwt()
-            print("Generated JWT: ", jwt)
-
-        """
-        self._jwt_ttl = jwt_ttl
-        # Set Network RTC time
-        self._get_local_time()
-        jwt = self._create_jwt
-        if self._log:
-            self._logger.debug("Generated JWT: ".format(jwt))
-        return jwt
-
     @property
     def client_id(self):
         """Returns a Google Cloud IOT Core Client ID.
@@ -319,41 +304,28 @@ class Cloud_Core:
             print("Client Identifier: ", client_id)
         return client_id
 
-    @property
-    def _create_jwt(self, jwt_algo="RS256"):
-        """Creates a JWT (JSON Web Token) for short-lived authentication
-        with Cloud IOT Core.
-        https://cloud.google.com/iot/docs/how-tos/credentials/jwts
+    def generate_jwt(self, ttl = 43200):
+        """Generates a JSON Web Token (https://jwt.io/) using network time.
+        :param int jwt_ttl: When the JWT token expires, defaults to 43200 minutes (or 12 hours).
 
-        :param str jwt_algo: JWT signing algorithm. RS256 and ES256 are supported
-                                by Cloud IOT Core. Only RS256 is supported by the
-                                CircuitPython_RSA module at this time.
+        Example usage of generating and setting a JSON-Web-Token:
+        ..code-block:: python
+
+            jwt = CloudCore.generate_jwt()
+            print("Generated JWT: ", jwt)
         """
-        if self._log:
-            self._logger.debug("Reading PEM file...")
-        priv_key = PrivateKey(*self._private_key)
-        # Required Claims
+        self._get_local_time()
         claims = {
             # The time that the token was issued at
             "iat": time.time(),
             # The time the token expires.
-            "exp": time.time() + self._jwt_ttl,
+            "exp": time.time() + ttl,
             # The audience field should always be set to the GCP project id.
             "aud": self._proj_id,
         }
-        # JWT Header
-        header = {"alg": jwt_algo, "typ": "JWT"}
-        # JWT Signature
-        content = string.b42_urlsafe_encode(json.dumps(header).encode("utf-8"))
-        content = (
-            content
-            + "."
-            + string.b42_urlsafe_encode(json.dumps(claims).encode("utf-8"))
-        )
-        # Compute JWT signature
-        signature = string.b42_urlsafe_encode(sign(content, priv_key, "SHA-256"))
-        jwt = "{0}.{1}".format(content, signature)
+        jwt = JWT.generate(claims, self._private_key, algo="RS256")
         return jwt
+
 
     def _get_local_time(self):
         """Fetch and "set" the local time of this microcontroller to the local time at the location, using an internet time API.
