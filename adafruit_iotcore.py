@@ -29,31 +29,14 @@ Implementation Notes
 * Adafruit CircuitPython firmware for the supported boards:
   https://github.com/adafruit/circuitpython/releases
 
-* Adafruit CircuitPython Requests Module:
-  https://github.com/adafruit/Adafruit_CircuitPython_Requests
-
-* Adafruit CircuitPython RSA Module:
-  https://github.com/adafruit/Adafruit_CircuitPython_RSA
-
-
-* Adafruit CircuitPython Binascii Module:
-  https://github.com/adafruit/Adafruit_CircuitPython_binascii
-
 """
 # Core CircuitPython modules
 import gc
-import json
 import time
 import rtc
 
 import adafruit_logging as logging
 from adafruit_jwt import JWT
-
-# ESP32SPI Modules
-import adafruit_requests as requests
-
-from adafruit_rsa import PrivateKey, sign
-from adafruit_binascii import b2a_base64, a2b_base64
 
 __version__ = "0.0.0-auto.0"
 __repo__ = "https://github.com/adafruit/Adafruit_CircuitPython_Cloud_IOT_Core.git"
@@ -69,7 +52,7 @@ TIME_SERVICE_STRFTIME = (
 )
 
 # Google IoT Device Identifier, shared between Cloud_Core and the MQTT_API
-device_id = None
+DEVICE_ID = None
 
 class MQTT_API_ERROR(Exception):
     """Exception raised on MQTT API return-code errors."""
@@ -196,7 +179,7 @@ class MQTT_API:
     def loop(self):
         """Maintains a connection with Google Cloud IoT Core's MQTT broker. You will
         need to manually call this method within a loop to retain connection.
-        
+
         Example of "pumping" a Google Core IoT loop.
         ..code-block:: python
 
@@ -209,22 +192,22 @@ class MQTT_API:
 
     def loop_blocking(self):
         """Begins a blocking loop to process messages from
-        IoT Core. Code below a call to this method will NOT run. 
+        IoT Core. Code below a call to this method will NOT run.
         """
         self._client.loop_forever()
-    
+
     # TODO: Implement a subscribe_to_subfolder topic
 
     def subscribe_to_config(self):
         """Subscribes to a Google Cloud IoT device's configuration
         mqtt topic.
         """
-        self.subscribe("config", 1)
+        self._client.subscribe("config", 1)
 
     def subscribe_to_all_commands(self):
         """Subscribes to a device's "commands/#" topic.
         """
-        self.subscribe("commands/#", 1)
+        self._client.subscribe("commands/#", 1)
 
     def publish(self, payload, topic="events", subfolder=None, qos=0):
         """Publishes a payload from the device to its Google Cloud IoT
@@ -236,12 +219,12 @@ class MQTT_API:
         :param float payload: Data to publish to Google Cloud IoT
         :param str topic: Required MQTT topic. Defaults to events.
         :param str subfolder: Optional MQTT topic subfolder. Defaults to None.
-        :param int qos: Quality of Service level for the message. 
+        :param int qos: Quality of Service level for the message.
         """
         if subfolder is not None:
-            mqtt_topic = "/devices/{}/{}/{}".format(device_id, topic, subfolder)
+            mqtt_topic = "/devices/{}/{}/{}".format(DEVICE_ID, topic, subfolder)
         elif topic is not None:
-            mqtt_topic = "/devices/{}/{}".format(device_id, topic)
+            mqtt_topic = "/devices/{}/{}".format(DEVICE_ID, topic)
         elif topic == "state" and subfolder is not None:
             raise ValueError("Subfolders are not supported for state messages.")
         else:
@@ -256,7 +239,7 @@ class MQTT_API:
         """
         self._client.publish(payload, "state")
 
-
+# pylint: disable=global-statement
 class Cloud_Core:
     """CircuitPython Google Cloud IoT Core module.
 
@@ -267,7 +250,7 @@ class Cloud_Core:
     """
 
     def __init__(self, network_manager, secrets, log=False):
-        global device_id
+        global DEVICE_ID
         # Validate NetworkManager
         network_manager_type = str(type(network_manager))
         if "ESPSPI_WiFiManager" in network_manager_type:
@@ -289,7 +272,7 @@ class Cloud_Core:
         self._proj_id = secrets["project_id"]
         self._region = secrets["cloud_region"]
         self._reg_id = secrets["registry_id"]
-        device_id = secrets["device_id"]
+        DEVICE_ID = secrets["device_id"]
         self._private_key = secrets["private_key"]
         self.broker = "mqtt.googleapis.com"
         self.username = b"unused"
@@ -300,14 +283,14 @@ class Cloud_Core:
         """Returns a Google Cloud IOT Core Client ID.
         """
         client_id = "projects/{0}/locations/{1}/registries/{2}/devices/{3}".format(
-            self._proj_id, self._region, self._reg_id, device_id
+            self._proj_id, self._region, self._reg_id, DEVICE_ID
         )
         if self._log:
             print("Client Identifier: ", client_id)
         return client_id
 
 
-    def generate_jwt(self, ttl = 43200):
+    def generate_jwt(self, ttl=43200):
         """Generates a JSON Web Token (https://jwt.io/) using network time.
         :param int jwt_ttl: When the JWT token expires, defaults to 43200 minutes (or 12 hours).
 
@@ -329,9 +312,10 @@ class Cloud_Core:
         jwt = JWT.generate(claims, self._private_key, algo="RS256")
         return jwt
 
-
+    # pylint: disable=line-too-long, too-many-locals
     def _get_local_time(self):
-        """Fetch and "set" the local time of this microcontroller to the local time at the location, using an internet time API.
+        """Fetch and "set" the local time of this microcontroller to the
+        local time at the location, using an internet time API.
         from Adafruit IO Arduino
         """
         api_url = None
