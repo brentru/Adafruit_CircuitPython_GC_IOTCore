@@ -6,8 +6,8 @@ from adafruit_esp32spi import adafruit_esp32spi
 from adafruit_esp32spi import adafruit_esp32spi_wifimanager
 import adafruit_esp32spi.adafruit_esp32spi_socket as socket
 
-from adafruit_minimqtt import MQTT, MMQTTException
-from adafruit_iotcore.adafruit_iotcore import Cloud_Core, MQTT_API
+from adafruit_minimqtt import MQTT
+from adafruit_iotcore import Cloud_Core, MQTT_API
 
 ### WiFi ###
 
@@ -52,9 +52,9 @@ def connect(client, userdata, flags, rc):
     # successfully to the broker.
     print('Connected to MQTT Broker!')
     print('Flags: {0}\n RC: {1}'.format(flags, rc))
-    #google_mqtt.subscribe_to_all_commands()
-    #google_mqtt.subscribe_to_config()
-    google_mqtt.subscribe("events")
+    # Subscribes to commands/# topic
+    google_mqtt.subscribe_to_all_commands()
+
     # Publish to the default "events" topic
     google_mqtt.publish('testing','events', qos=1)
 
@@ -84,10 +84,11 @@ print("connecting to WiFi...")
 wifi.connect()
 print("Connected!")
 
-
-google_iot = Cloud_Core(wifi, secrets, log=True)
+# Initialize Google Cloud IoT Core interface
+google_iot = Cloud_Core(wifi, secrets, log=False)
 
 # Optional JSON-Web-Token (JWT) Generation
+# print("Generating JWT...")
 # jwt = google_iot.generate_jwt()
 # print("Your JWT is: ", jwt)
 
@@ -95,13 +96,12 @@ google_iot = Cloud_Core(wifi, secrets, log=True)
 client =  MQTT(socket,
                broker = google_iot.broker,
                username = google_iot.username,
-               password = secrets['generated_jwt'],
+               password = secrets['jwt'],
                client_id = google_iot.cid,
                network_manager = wifi,
                log=True)
-client.set_logger_level("DEBUG")
 
-# Set up a new Google MQTT Client
+# Initialize Google MQTT API Client
 google_mqtt = MQTT_API(client)
 
 # Connect callback handlers to Google MQTT Client
@@ -115,5 +115,10 @@ google_mqtt.on_message = message
 print('Attempting to connect to %s'%client.broker)
 google_mqtt.connect()
 
-while True:
-    google_mqtt.loop()
+# Pump the message loop forever, all events are
+# handled in their callback handlers
+# while True:
+#    google_mqtt.loop()
+
+# Attempt to loop forever and handle network disconnection
+google_mqtt.loop_blocking()

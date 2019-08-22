@@ -29,16 +29,15 @@ Implementation Notes
 * Adafruit CircuitPython firmware for the supported boards:
   https://github.com/adafruit/circuitpython/releases
 
-* Adafruit CircuitPython RSA Module:
-  https://github.com/adafruit/Adafruit_CircuitPython_RSA
+* Adafruit CircuitPython JWT Module:
+  https://github.com/adafruit/Adafruit_CircuitPython_JWT
 
-* Adafruit CircuitPython Binascii Module:
-  https://github.com/adafruit/Adafruit_CircuitPython_binascii
+* Adafruit CircuitPython Logging Module:
+  https://github.com/adafruit/Adafruit_CircuitPython_Logging
 
 """
 # Core CircuitPython modules
 import gc
-import json
 import time
 import rtc
 
@@ -113,19 +112,12 @@ class MQTT_API:
         self._connected = False
         # Set up a device identifier by splitting out the full CID
         self.device_id = self._client._client_id.split("/")[7]
-        print(self.device_id )
 
     def __enter__(self):
         return self
 
     def __exit__(self, exception_type, exception_value, traceback):
         self.disconnect()
-
-    def connect(self):
-        """Connects to the Google MQTT Broker.
-        """
-        self._client.connect()
-        self._connected = True
 
     def disconnect(self):
         """Disconnects from the Google MQTT Broker.
@@ -143,6 +135,12 @@ class MQTT_API:
         self.on_unsubscribe = None
         # De-initialize MiniMQTT Client
         self._client.deinit()
+
+    def connect(self):
+        """Connects to the Google MQTT Broker.
+        """
+        self._client.connect()
+        self._connected = True
 
     @property
     def is_connected(self):
@@ -204,25 +202,38 @@ class MQTT_API:
         """
         self._client.loop_forever()
 
-    # TODO: Implement a subscribe_to_subfolder topic
-
-    def subscribe(self, topic, qos=1):
+    def subscribe(self, topic, subfolder=None, qos=1):
         """Subscribes to a Google Cloud IoT device topic.
+        :param str topic: Required MQTT topic. Defaults to events.
+        :param str subfolder: Optional MQTT topic subfolder. Defaults to None.
+        :param int qos: Quality of Service level for the message.
         """
-        print(self.device_id)
-        mqtt_topic = "/devices/{}/{}".format(self.device_id, topic)
+        if subfolder is not None:
+            mqtt_topic = "/devices/{}/{}/{}".format(self.device_id, topic, subfolder)
+        else:
+            mqtt_topic = "/devices/{}/{}".format(self.device_id, topic)
         self._client.subscribe(mqtt_topic, qos)
 
-    def subscribe_to_config(self):
-        """Subscribes to a Google Cloud IoT device's configuration
-        mqtt topic.
+    def subscribe_to_subfolder(self, topic, subfolder, qos=1):
+        """Subscribes to a Google Cloud IoT device's topic subfolder
+        :param str topic: Required MQTT topic.
+        :param str subfolder: Optional MQTT topic subfolder. Defaults to None.
+        :param int qos: Quality of Service level for the message.
         """
-        self.subscribe("config", 1)
+        self.subscribe(topic, subfolder, qos)
 
-    def subscribe_to_all_commands(self):
-        """Subscribes to a device's "commands/#" topic.
+    def subscribe_to_config(self, qos=1):
+        """Subscribes to a Google Cloud IoT device's configuration
+        topic.
+        :param int qos: Quality of Service level for the message.
         """
-        self.subscribe("commands/#", 1)
+        self.subscribe("config", qos=qos)
+
+    def subscribe_to_all_commands(self, qos=1):
+        """Subscribes to a device's "commands/#" topic.
+        :param int qos: Quality of Service level for the message.
+        """
+        self.subscribe("commands/#", qos=qos)
 
     def publish(self, payload, topic="events", subfolder=None, qos=0):
         """Publishes a payload from the device to its Google Cloud IoT
@@ -255,6 +266,7 @@ class MQTT_API:
         self._client.publish(payload, "state")
 
 
+# pylint: disable=too-many-instance-attributes
 class Cloud_Core:
     """CircuitPython Google Cloud IoT Core module.
 
@@ -278,8 +290,8 @@ class Cloud_Core:
             raise AttributeError(
                 "Project settings are kept in secrets.py, please add them there!"
             )
-        self._log = log
-        if self._log is True:
+        self._logger = None
+        if log is True:
             self._logger = logging.getLogger("log")
             self._logger.setLevel(logging.DEBUG)
         # Configuration, from secrets file
@@ -299,14 +311,15 @@ class Cloud_Core:
         client_id = "projects/{0}/locations/{1}/registries/{2}/devices/{3}".format(
             self._proj_id, self._region, self._reg_id, self._device_id
         )
-        if self._log:
-            print("Client Identifier: ", client_id)
+        if self._logger:
+            self._logger.debug("Client ID: {}".format(client_id))
         return client_id
 
 
-    def generate_jwt(self, ttl=43200):
+    def generate_jwt(self, ttl=43200, algo="RS256"):
         """Generates a JSON Web Token (https://jwt.io/) using network time.
         :param int jwt_ttl: When the JWT token expires, defaults to 43200 minutes (or 12 hours).
+        :param str algo: Algorithm used to create a JSON Web Token.
 
         Example usage of generating and setting a JSON-Web-Token:
         ..code-block:: python
@@ -314,6 +327,8 @@ class Cloud_Core:
             jwt = CloudCore.generate_jwt()
             print("Generated JWT: ", jwt)
         """
+        if self._logger:
+            self._logger.debug("Generating JWT...")
         self._get_local_time()
         claims = {
             # The time that the token was issued at
@@ -323,7 +338,7 @@ class Cloud_Core:
             # The audience field should always be set to the GCP project id.
             "aud": self._proj_id,
         }
-        jwt = JWT.generate(claims, self._private_key, algo="RS256")
+        jwt = JWT.generate(claims, self._private_key, algo)
         return jwt
 
     # pylint: disable=line-too-long, too-many-locals
@@ -343,18 +358,15 @@ class Cloud_Core:
         location = None
         location = self._secrets.get("timezone", location)
         if location:
-            if self._log:
-                print("Getting time for timezone", location)
+            if self._logger:
+                self._logger.debug("Getting time for timezone.")
             api_url = (TIME_SERVICE + "&tz=%s") % (aio_username, aio_key, location)
         else:  # we'll try to figure it out from the IP address
-            print("Getting time from IP address")
+            self._logger.debug("Getting time from IP Address..")
             api_url = TIME_SERVICE % (aio_username, aio_key)
         api_url += TIME_SERVICE_STRFTIME
         try:
             response = self._wifi.get(api_url)
-            if self._log:
-                print("Time request: ", api_url)
-                print("Time reply: ", response.text)
             times = response.text.split(" ")
             the_date = times[0]
             the_time = times[1]
@@ -372,9 +384,6 @@ class Cloud_Core:
             (year, month, mday, hours, minutes, seconds, week_day, year_day, is_dst)
         )
         rtc.RTC().datetime = now
-        if self._log:
-            print("current time: {}".format(time.localtime()))
-
         # now clean up
         response.close()
         response = None
