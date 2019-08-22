@@ -29,14 +29,22 @@ Implementation Notes
 * Adafruit CircuitPython firmware for the supported boards:
   https://github.com/adafruit/circuitpython/releases
 
+* Adafruit CircuitPython RSA Module:
+  https://github.com/adafruit/Adafruit_CircuitPython_RSA
+
+* Adafruit CircuitPython Binascii Module:
+  https://github.com/adafruit/Adafruit_CircuitPython_binascii
+
 """
 # Core CircuitPython modules
 import gc
+import json
 import time
 import rtc
 
 import adafruit_logging as logging
 from adafruit_jwt import JWT
+
 
 __version__ = "0.0.0-auto.0"
 __repo__ = "https://github.com/adafruit/Adafruit_CircuitPython_Cloud_IOT_Core.git"
@@ -50,9 +58,6 @@ TIME_SERVICE = (
 TIME_SERVICE_STRFTIME = (
     "&fmt=%25Y-%25m-%25d+%25H%3A%25M%3A%25S.%25L+%25j+%25u+%25z+%25Z"
 )
-
-# Google IoT Device Identifier, shared between Cloud_Core and the MQTT_API
-DEVICE_ID = None
 
 class MQTT_API_ERROR(Exception):
     """Exception raised on MQTT API return-code errors."""
@@ -106,6 +111,9 @@ class MQTT_API:
             self._logger = True
             self._client.set_logger_level("DEBUG")
         self._connected = False
+        # Set up a device identifier by splitting out the full CID
+        self.device_id = self._client._client_id.split("/")[7]
+        print(self.device_id )
 
     def __enter__(self):
         return self
@@ -198,16 +206,23 @@ class MQTT_API:
 
     # TODO: Implement a subscribe_to_subfolder topic
 
+    def subscribe(self, topic, qos=1):
+        """Subscribes to a Google Cloud IoT device topic.
+        """
+        print(self.device_id)
+        mqtt_topic = "/devices/{}/{}".format(self.device_id, topic)
+        self._client.subscribe(mqtt_topic, qos)
+
     def subscribe_to_config(self):
         """Subscribes to a Google Cloud IoT device's configuration
         mqtt topic.
         """
-        self._client.subscribe("config", 1)
+        self.subscribe("config", 1)
 
     def subscribe_to_all_commands(self):
         """Subscribes to a device's "commands/#" topic.
         """
-        self._client.subscribe("commands/#", 1)
+        self.subscribe("commands/#", 1)
 
     def publish(self, payload, topic="events", subfolder=None, qos=0):
         """Publishes a payload from the device to its Google Cloud IoT
@@ -222,9 +237,9 @@ class MQTT_API:
         :param int qos: Quality of Service level for the message.
         """
         if subfolder is not None:
-            mqtt_topic = "/devices/{}/{}/{}".format(DEVICE_ID, topic, subfolder)
+            mqtt_topic = "/devices/{}/{}/{}".format(self.device_id, topic, subfolder)
         elif topic is not None:
-            mqtt_topic = "/devices/{}/{}".format(DEVICE_ID, topic)
+            mqtt_topic = "/devices/{}/{}".format(self.device_id, topic)
         elif topic == "state" and subfolder is not None:
             raise ValueError("Subfolders are not supported for state messages.")
         else:
@@ -239,7 +254,7 @@ class MQTT_API:
         """
         self._client.publish(payload, "state")
 
-# pylint: disable=global-statement
+
 class Cloud_Core:
     """CircuitPython Google Cloud IoT Core module.
 
@@ -250,7 +265,6 @@ class Cloud_Core:
     """
 
     def __init__(self, network_manager, secrets, log=False):
-        global DEVICE_ID
         # Validate NetworkManager
         network_manager_type = str(type(network_manager))
         if "ESPSPI_WiFiManager" in network_manager_type:
@@ -272,7 +286,7 @@ class Cloud_Core:
         self._proj_id = secrets["project_id"]
         self._region = secrets["cloud_region"]
         self._reg_id = secrets["registry_id"]
-        DEVICE_ID = secrets["device_id"]
+        self._device_id = secrets["device_id"]
         self._private_key = secrets["private_key"]
         self.broker = "mqtt.googleapis.com"
         self.username = b"unused"
@@ -283,7 +297,7 @@ class Cloud_Core:
         """Returns a Google Cloud IOT Core Client ID.
         """
         client_id = "projects/{0}/locations/{1}/registries/{2}/devices/{3}".format(
-            self._proj_id, self._region, self._reg_id, DEVICE_ID
+            self._proj_id, self._region, self._reg_id, self._device_id
         )
         if self._log:
             print("Client Identifier: ", client_id)
