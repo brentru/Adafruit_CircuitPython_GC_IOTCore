@@ -14,7 +14,7 @@
 #
 # Modified by Brent Rubell for Adafruit Industries, 2019
 """
-`adafruit_cloud_iot_core`
+`adafruit_iotcore`
 ================================================================================
 
 CircuitPython Google Cloud IoT Module
